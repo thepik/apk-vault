@@ -27,8 +27,17 @@ aes-gcm = "0.11.1"
 rand = "0.10.2"
 base64 = "0.23.1"
 argon2 = "0.6.0"
-security-framework = "3.7.0"
 uuid = { version = "1.26.0", features = ["v4"] }
 tauri-plugin-clipboard-manager = "2.3.2"
 tauri-plugin-dialog = "2.7.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7.0"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Security_Credentials",
+  "Win32_System_Memory",
+] }
 

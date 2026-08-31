@@ -25,3 +25,6 @@ dist-ssr
 
 # Internal spec (not for release)
 SPEC.md
+
+# Local agent tooling
+.reasonix/
