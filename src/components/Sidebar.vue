@@ -47,7 +47,7 @@ function initial(name: string) {
         :class="{ active: selectedId === p.id }"
         @click="emit('select', p.id)"
         @contextmenu.prevent="emit('renamePlatform', p)"
-        :title="`${p.name}（右键重命名）`"
+        :title="`${p.name}（右键编辑）`"
       >
         <span class="platform-dot" :style="{ background: PLATFORM_COLORS[p.color] || PLATFORM_COLORS.blue }">
           {{ initial(p.name) }}

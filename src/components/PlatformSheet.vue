@@ -17,6 +17,8 @@ const emit = defineEmits<{
 const isRename = !!props.platform;
 const name = ref(props.platform?.name ?? "");
 const color = ref(props.platform?.color ?? "blue");
+const endpointOpenai = ref(props.platform?.endpoint_openai ?? "");
+const endpointAnthropic = ref(props.platform?.endpoint_anthropic ?? "");
 const error = ref("");
 const input = ref<HTMLInputElement | null>(null);
 
@@ -31,8 +33,18 @@ async function submit() {
   try {
     if (isRename) {
       await api.renamePlatform(props.platform!.id, name.value);
+      await api.setPlatformEndpoints(
+        props.platform!.id,
+        endpointOpenai.value.trim(),
+        endpointAnthropic.value.trim(),
+      );
     } else {
-      await api.addPlatform(name.value, color.value);
+      await api.addPlatform(
+        name.value,
+        color.value,
+        endpointOpenai.value.trim(),
+        endpointAnthropic.value.trim(),
+      );
     }
     emit("saved");
     emit("close");
@@ -45,7 +57,7 @@ async function submit() {
 <template>
   <div class="sheet-backdrop" @mousedown.self="emit('close')">
     <div class="sheet" style="width: 340px" @keydown.esc.stop="emit('close')" @keydown.enter.prevent="submit">
-      <h2>{{ isRename ? "重命名平台" : "添加平台" }}</h2>
+      <h2>{{ isRename ? "编辑平台" : "添加平台" }}</h2>
       <div class="field">
         <label>名称</label>
         <input ref="input" v-model="name" placeholder="例如：OpenAI" />
@@ -62,6 +74,25 @@ async function submit() {
             @click="color = key"
           />
         </div>
+      </div>
+      <div class="field">
+        <label>OpenAI 协议地址（可选）</label>
+        <input
+          v-model="endpointOpenai"
+          class="mono"
+          placeholder="https://api.openai.com/v1"
+          spellcheck="false"
+        />
+      </div>
+      <div class="field">
+        <label>Anthropic 协议地址（可选）</label>
+        <input
+          v-model="endpointAnthropic"
+          class="mono"
+          placeholder="https://api.anthropic.com"
+          spellcheck="false"
+        />
+        <div class="hint">留空表示未设置；需以 http:// 或 https:// 开头。</div>
       </div>
       <p class="error">{{ error }}</p>
       <div class="footer">

@@ -30,13 +30,34 @@ fn list_state(state: State<AppState>) -> Result<VaultState, String> {
 }
 
 #[tauri::command]
-fn add_platform(state: State<AppState>, name: String, color: Option<String>) -> Result<PlatformDto, String> {
-    state.db.add_platform(&name, color.as_deref().unwrap_or(""))
+fn add_platform(
+    state: State<AppState>,
+    name: String,
+    color: Option<String>,
+    endpoint_openai: Option<String>,
+    endpoint_anthropic: Option<String>,
+) -> Result<PlatformDto, String> {
+    state.db.add_platform(
+        &name,
+        color.as_deref().unwrap_or(""),
+        endpoint_openai.as_deref().unwrap_or(""),
+        endpoint_anthropic.as_deref().unwrap_or(""),
+    )
 }
 
 #[tauri::command]
 fn rename_platform(state: State<AppState>, id: String, name: String) -> Result<(), String> {
     state.db.rename_platform(&id, &name)
+}
+
+#[tauri::command]
+fn set_platform_endpoints(
+    state: State<AppState>,
+    id: String,
+    openai: String,
+    anthropic: String,
+) -> Result<(), String> {
+    state.db.set_platform_endpoints(&id, &openai, &anthropic)
 }
 
 #[tauri::command]
@@ -122,6 +143,7 @@ pub fn run() {
             list_state,
             add_platform,
             rename_platform,
+            set_platform_endpoints,
             delete_platform,
             add_entry,
             update_entry,

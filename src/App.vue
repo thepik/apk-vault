@@ -9,6 +9,7 @@ import EntrySheet from "./components/EntrySheet.vue";
 import PlatformSheet from "./components/PlatformSheet.vue";
 import BackupSheet from "./components/BackupSheet.vue";
 import ConfirmDialog from "./components/ConfirmDialog.vue";
+import EndpointBar from "./components/EndpointBar.vue";
 
 const platforms = ref<Platform[]>([]);
 const entries = ref<KeyEntry[]>([]);
@@ -86,6 +87,13 @@ const groups = computed<Group[]>(() => {
 });
 
 const totalCount = computed(() => entries.value.length);
+
+// 当前选中平台（「全部」时为 undefined）
+const endpointPlatform = computed<Platform | undefined>(() =>
+  selectedPlatform.value === "all"
+    ? undefined
+    : platforms.value.find((p) => p.id === selectedPlatform.value),
+);
 
 // ---------- 键盘 ----------
 
@@ -234,43 +242,52 @@ async function onEntryCopied() {
           <button class="btn" @mousedown.stop @click="openAddPlatform">添加平台</button>
         </div>
       </div>
-      <div v-else-if="!visibleEntries.length" class="empty" data-tauri-drag-region>
-        <div class="glyph">🗂️</div>
-        <h3>{{ query ? "没有匹配的结果" : "这里还没有 Key" }}</h3>
-        <p>{{ query ? "换个关键词试试，或清空搜索。" : "点击右上角「新增 Key」，粘贴你的第一个 API Key。" }}</p>
-        <div class="row">
-          <button v-if="query" class="btn" @mousedown.stop @click="search = ''">清空搜索</button>
-          <button v-else class="btn primary" @mousedown.stop @click="openAddEntry">新增 Key</button>
-        </div>
-      </div>
+      <template v-else>
+        <!-- 平台视图顶部：调用地址（「全部」视图不展示；未设置时也可点击填写） -->
+        <EndpointBar
+          v-if="endpointPlatform"
+          :platform="endpointPlatform"
+          @edit="openRenamePlatform(endpointPlatform)"
+        />
 
-      <!-- Key 列表 -->
-      <div v-else class="key-scroll">
-        <div v-for="g in groups" :key="g.platform.id">
-          <div class="group-header">
-            <span
-              class="platform-dot"
-              :style="{ background: PLATFORM_COLORS[g.platform.color] || PLATFORM_COLORS.blue }"
-            >
-              {{ g.platform.name.charAt(0).toUpperCase() }}
-            </span>
-            {{ g.platform.name }}
-            <span class="count">{{ g.entries.length }}</span>
-          </div>
-          <div class="key-card">
-            <KeyRow
-              v-for="e in g.entries"
-              :key="e.id"
-              :entry="e"
-              :selected="selectedEntryId === e.id"
-              @select="selectedEntryId = e.id"
-              @copied="onEntryCopied"
-              @edit="editingEntry = e; showEntrySheet = true"
-              @deleted="refresh"
-            />
+        <div v-if="!visibleEntries.length" class="empty" data-tauri-drag-region>
+          <div class="glyph">🗂️</div>
+          <h3>{{ query ? "没有匹配的结果" : "这里还没有 Key" }}</h3>
+          <p>{{ query ? "换个关键词试试，或清空搜索。" : "点击右上角「新增 Key」，粘贴你的第一个 API Key。" }}</p>
+          <div class="row">
+            <button v-if="query" class="btn" @mousedown.stop @click="search = ''">清空搜索</button>
+            <button v-else class="btn primary" @mousedown.stop @click="openAddEntry">新增 Key</button>
           </div>
         </div>
-      </div>
+
+        <!-- Key 列表 -->
+        <div v-else class="key-scroll">
+          <div v-for="g in groups" :key="g.platform.id">
+            <div class="group-header">
+              <span
+                class="platform-dot"
+                :style="{ background: PLATFORM_COLORS[g.platform.color] || PLATFORM_COLORS.blue }"
+              >
+                {{ g.platform.name.charAt(0).toUpperCase() }}
+              </span>
+              {{ g.platform.name }}
+              <span class="count">{{ g.entries.length }}</span>
+            </div>
+            <div class="key-card">
+              <KeyRow
+                v-for="e in g.entries"
+                :key="e.id"
+                :entry="e"
+                :selected="selectedEntryId === e.id"
+                @select="selectedEntryId = e.id"
+                @copied="onEntryCopied"
+                @edit="editingEntry = e; showEntrySheet = true"
+                @deleted="refresh"
+              />
+            </div>
+          </div>
+        </div>
+      </template>
     </main>
   </div>
 

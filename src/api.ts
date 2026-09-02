@@ -6,10 +6,23 @@ import type { Platform, KeyEntry, VaultState } from "./types";
 export const api = {
   listState: () => invoke<VaultState>("list_state"),
 
-  addPlatform: (name: string, color?: string) =>
-    invoke<Platform>("add_platform", { name, color: color ?? null }),
+  addPlatform: (
+    name: string,
+    color?: string,
+    endpointOpenai?: string,
+    endpointAnthropic?: string,
+  ) =>
+    invoke<Platform>("add_platform", {
+      name,
+      color: color ?? null,
+      endpointOpenai: endpointOpenai ?? null,
+      endpointAnthropic: endpointAnthropic ?? null,
+    }),
   renamePlatform: (id: string, name: string) =>
     invoke<void>("rename_platform", { id, name }),
+  /** 保存平台的两个调用地址，空串表示未设置 */
+  setPlatformEndpoints: (id: string, openai: string, anthropic: string) =>
+    invoke<void>("set_platform_endpoints", { id, openai, anthropic }),
   deletePlatform: (id: string) => invoke<void>("delete_platform", { id }),
 
   addEntry: (platformId: string, name: string, key: string) =>
@@ -24,6 +37,9 @@ export const api = {
     const plain = await invoke<string>("copy_entry", { id });
     await writeText(plain);
   },
+
+  /** 复制任意文本（调用地址等）到剪贴板，不计入使用统计 */
+  copyText: (text: string) => writeText(text),
 
   /** 弹出保存对话框并写出加密备份；用户取消返回 false */
   exportBackup: async (passphrase: string): Promise<boolean> => {

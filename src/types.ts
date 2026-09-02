@@ -2,6 +2,10 @@ export interface Platform {
   id: string;
   name: string;
   color: string;
+  /** OpenAI 协议调用地址，空串表示未设置 */
+  endpoint_openai: string;
+  /** Anthropic 协议调用地址，空串表示未设置 */
+  endpoint_anthropic: string;
   key_count: number;
   last_copied_at: number | null;
 }

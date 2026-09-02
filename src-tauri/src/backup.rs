@@ -22,6 +22,11 @@ struct BackupPayload {
 struct BackupPlatform {
     name: String,
     color: String,
+    /// v0.3 起携带；旧备份缺失时视为未设置
+    #[serde(default)]
+    endpoint_openai: Option<String>,
+    #[serde(default)]
+    endpoint_anthropic: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -51,7 +56,12 @@ pub fn export_backup(db: &Db, passphrase: &str) -> Result<String, String> {
         version: 1,
         platforms: platforms
             .into_iter()
-            .map(|(name, color)| BackupPlatform { name, color })
+            .map(|(name, color, ep_openai, ep_anthropic)| BackupPlatform {
+                name,
+                color,
+                endpoint_openai: Some(ep_openai).filter(|s| !s.is_empty()),
+                endpoint_anthropic: Some(ep_anthropic).filter(|s| !s.is_empty()),
+            })
             .collect(),
         entries: entries
             .into_iter()
@@ -96,10 +106,17 @@ pub fn import_backup(db: &Db, passphrase: &str, content: &str) -> Result<usize, 
     if payload.version != 1 {
         return Err(format!("不支持的备份版本 v{}", payload.version));
     }
-    let platforms: Vec<(String, String)> = payload
+    let platforms: Vec<(String, String, String, String)> = payload
         .platforms
         .into_iter()
-        .map(|p| (p.name, p.color))
+        .map(|p| {
+            (
+                p.name,
+                p.color,
+                p.endpoint_openai.unwrap_or_default(),
+                p.endpoint_anthropic.unwrap_or_default(),
+            )
+        })
         .collect();
     let entries: Vec<(String, String, String, i64, Option<i64>, i64)> = payload
         .entries
@@ -123,7 +140,14 @@ mod tests {
     #[test]
     fn export_import_roundtrip() {
         let src = test_db();
-        let p = src.add_platform("OpenAI", "blue").unwrap();
+        let p = src
+            .add_platform(
+                "OpenAI",
+                "blue",
+                "https://api.openai.com/v1",
+                "https://anthropic.openai.com",
+            )
+            .unwrap();
         src.add_entry(&p.id, "主力", "sk-live-abcdef").unwrap();
 
         let content = export_backup(&src, "口令1234").unwrap();
@@ -140,6 +164,9 @@ mod tests {
         assert_eq!(dst.reveal_entry(&entries[0].id).unwrap(), "sk-live-abcdef");
         let plats = dst.list_platforms().unwrap();
         assert_eq!(plats[0].name, "OpenAI");
+        // 调用地址随备份恢复
+        assert_eq!(plats[0].endpoint_openai, "https://api.openai.com/v1");
+        assert_eq!(plats[0].endpoint_anthropic, "https://anthropic.openai.com");
 
         // 同平台名合并：再次导入不新增平台
         let n2 = import_backup(&dst, "口令1234", &content).unwrap();

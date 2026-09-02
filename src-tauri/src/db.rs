@@ -18,6 +18,10 @@ pub struct PlatformDto {
     pub id: String,
     pub name: String,
     pub color: String,
+    /// OpenAI 协议调用地址，空串表示未设置
+    pub endpoint_openai: String,
+    /// Anthropic 协议调用地址，空串表示未设置
+    pub endpoint_anthropic: String,
     pub key_count: i64,
     pub last_copied_at: Option<i64>,
 }
@@ -43,6 +47,18 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// 调用地址规范化：trim；留空表示未设置；非空时必须是 http(s) URL。
+fn normalize_endpoint(url: &str) -> Result<String, String> {
+    let u = url.trim();
+    if u.is_empty() {
+        return Ok(String::new());
+    }
+    if !(u.starts_with("http://") || u.starts_with("https://")) {
+        return Err("调用地址需以 http:// 或 https:// 开头".into());
+    }
+    Ok(u.to_string())
 }
 
 impl Db {
@@ -75,6 +91,29 @@ impl Db {
             ",
         )
         .map_err(|e| format!("migrate db: {e}"))?;
+
+        // 增量迁移：为旧库补充平台调用地址字段（新库由上面的建表语句直接带出）。
+        let existing_cols: Vec<String> = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(platform)")
+                .map_err(|e| format!("migrate db: {e}"))?;
+            let cols = stmt
+                .query_map([], |r| r.get::<_, String>(1))
+                .map_err(|e| format!("migrate db: {e}"))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("migrate db: {e}"))?;
+            cols
+        };
+        for col in ["endpoint_openai", "endpoint_anthropic"] {
+            if !existing_cols.iter().any(|c| c == col) {
+                conn.execute(
+                    &format!("ALTER TABLE platform ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"),
+                    [],
+                )
+                .map_err(|e| format!("migrate db: {e}"))?;
+            }
+        }
+
         Ok(Db {
             conn: Mutex::new(conn),
             master_key,
@@ -87,7 +126,7 @@ impl Db {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn
             .prepare(
-                "SELECT p.id, p.name, p.color,
+                "SELECT p.id, p.name, p.color, p.endpoint_openai, p.endpoint_anthropic,
                         (SELECT COUNT(*) FROM key_entry k WHERE k.platform_id = p.id) AS key_count,
                         (SELECT MAX(k.last_copied_at) FROM key_entry k WHERE k.platform_id = p.id) AS last_copied_at
                  FROM platform p
@@ -100,19 +139,29 @@ impl Db {
                     id: r.get(0)?,
                     name: r.get(1)?,
                     color: r.get(2)?,
-                    key_count: r.get(3)?,
-                    last_copied_at: r.get(4)?,
+                    endpoint_openai: r.get(3)?,
+                    endpoint_anthropic: r.get(4)?,
+                    key_count: r.get(5)?,
+                    last_copied_at: r.get(6)?,
                 })
             })
             .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
     }
 
-    pub fn add_platform(&self, name: &str, color: &str) -> Result<PlatformDto, String> {
+    pub fn add_platform(
+        &self,
+        name: &str,
+        color: &str,
+        endpoint_openai: &str,
+        endpoint_anthropic: &str,
+    ) -> Result<PlatformDto, String> {
         let name = name.trim();
         if name.is_empty() {
             return Err("平台名称不能为空".into());
         }
+        let endpoint_openai = normalize_endpoint(endpoint_openai)?;
+        let endpoint_anthropic = normalize_endpoint(endpoint_anthropic)?;
         let color = if PLATFORM_COLORS.contains(&color) {
             color.to_string()
         } else {
@@ -122,8 +171,9 @@ impl Db {
         let id = Uuid::new_v4().to_string();
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT INTO platform (id, name, color, created_at) VALUES (?1, ?2, ?3, ?4)",
-            params![id, name, color, now_ms()],
+            "INSERT INTO platform (id, name, color, endpoint_openai, endpoint_anthropic, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, name, color, endpoint_openai, endpoint_anthropic, now_ms()],
         )
         .map_err(|e| {
             if e.to_string().contains("UNIQUE") {
@@ -136,9 +186,33 @@ impl Db {
             id,
             name: name.to_string(),
             color,
+            endpoint_openai,
+            endpoint_anthropic,
             key_count: 0,
             last_copied_at: None,
         })
+    }
+
+    /// 更新平台的两个调用地址（传空串表示清除）。
+    pub fn set_platform_endpoints(
+        &self,
+        id: &str,
+        openai: &str,
+        anthropic: &str,
+    ) -> Result<(), String> {
+        let openai = normalize_endpoint(openai)?;
+        let anthropic = normalize_endpoint(anthropic)?;
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let changed = conn
+            .execute(
+                "UPDATE platform SET endpoint_openai = ?2, endpoint_anthropic = ?3 WHERE id = ?1",
+                params![id, openai, anthropic],
+            )
+            .map_err(|e| e.to_string())?;
+        if changed == 0 {
+            return Err("平台不存在".into());
+        }
+        Ok(())
     }
 
     pub fn rename_platform(&self, id: &str, name: &str) -> Result<(), String> {
@@ -310,15 +384,25 @@ impl Db {
 
     // ---------- 备份内部接口 ----------
 
-    pub fn dump_all(&self) -> Result<(Vec<(String, String)>, Vec<(String, String, String, i64, Option<i64>, i64)>), String> {
-        // platforms: (name, color)
+    pub fn dump_all(
+        &self,
+    ) -> Result<
+        (
+            Vec<(String, String, String, String)>,
+            Vec<(String, String, String, i64, Option<i64>, i64)>,
+        ),
+        String,
+    > {
+        // platforms: (name, color, endpoint_openai, endpoint_anthropic)
         // entries: (platform_name, name, plaintext_key, copy_count, last_copied_at, created_at)
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let mut p_stmt = conn
-            .prepare("SELECT name, color FROM platform ORDER BY created_at")
+            .prepare("SELECT name, color, endpoint_openai, endpoint_anthropic FROM platform ORDER BY created_at")
             .map_err(|e| e.to_string())?;
-        let platforms: Vec<(String, String)> = p_stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        let platforms: Vec<(String, String, String, String)> = p_stmt
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })
             .map_err(|e| e.to_string())?
             .collect::<Result<_, _>>()
             .map_err(|e| e.to_string())?;
@@ -352,19 +436,22 @@ impl Db {
     /// 从备份恢复：平台按名称合并（同名复用），Key 全部新增。
     pub fn restore_all(
         &self,
-        platforms: &[(String, String)],
+        platforms: &[(String, String, String, String)],
         entries: &[(String, String, String, i64, Option<i64>, i64)],
     ) -> Result<usize, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        for (name, color) in platforms {
+        for (name, color, ep_openai, ep_anthropic) in platforms {
             let color = if PLATFORM_COLORS.contains(&color.as_str()) {
                 color.as_str()
             } else {
                 "blue"
             };
+            let ep_openai = normalize_endpoint(ep_openai).unwrap_or_default();
+            let ep_anthropic = normalize_endpoint(ep_anthropic).unwrap_or_default();
             conn.execute(
-                "INSERT OR IGNORE INTO platform (id, name, color, created_at) VALUES (?1, ?2, ?3, ?4)",
-                params![Uuid::new_v4().to_string(), name, color, now_ms()],
+                "INSERT OR IGNORE INTO platform (id, name, color, endpoint_openai, endpoint_anthropic, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![Uuid::new_v4().to_string(), name, color, ep_openai, ep_anthropic, now_ms()],
             )
             .map_err(|e| e.to_string())?;
         }
@@ -413,8 +500,8 @@ mod tests {
     #[test]
     fn full_crud_and_masking() {
         let db = test_db();
-        let p = db.add_platform("OpenAI", "").unwrap();
-        assert!(db.add_platform("openai", "").is_err() || db.add_platform("OpenAI", "").is_err());
+        let p = db.add_platform("OpenAI", "", "", "").unwrap();
+        assert!(db.add_platform("openai", "", "", "").is_err() || db.add_platform("OpenAI", "", "", "").is_err());
 
         let e = db
             .add_entry(&p.id, "  个人主力 ", "  sk-test-abcd1234  ")
@@ -441,7 +528,7 @@ mod tests {
         assert!(entries[0].last_copied_at.is_some());
 
         // 编辑：改名换平台，不替换 key
-        let p2 = db.add_platform("DeepSeek", "green").unwrap();
+        let p2 = db.add_platform("DeepSeek", "green", "", "").unwrap();
         db.update_entry(&e.id, "改名后", &p2.id, None).unwrap();
         let entries = db.list_entries().unwrap();
         assert_eq!(entries[0].name, "改名后");
@@ -461,5 +548,33 @@ mod tests {
     fn short_key_masking() {
         assert_eq!(crypto::mask_key("abc"), "abc…");
         assert_eq!(crypto::mask_key("sk-ant-xyz123"), "sk-…z123");
+    }
+
+    #[test]
+    fn platform_endpoints_crud_and_validation() {
+        let db = test_db();
+        let p = db
+            .add_platform(
+                "Relay",
+                "",
+                " https://api.example.com/v1 ",
+                "https://anthropic.example.com",
+            )
+            .unwrap();
+        // trim 生效
+        assert_eq!(p.endpoint_openai, "https://api.example.com/v1");
+        assert_eq!(p.endpoint_anthropic, "https://anthropic.example.com");
+
+        // 更新 + 清空
+        db.set_platform_endpoints(&p.id, "http://localhost:8080/v1", "").unwrap();
+        let listed = db.list_platforms().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].endpoint_openai, "http://localhost:8080/v1");
+        assert_eq!(listed[0].endpoint_anthropic, "");
+
+        // 非法地址被拒绝
+        assert!(db.set_platform_endpoints(&p.id, "api.example.com/v1", "").is_err());
+        // 平台不存在报错
+        assert!(db.set_platform_endpoints("no-such-id", "https://x.com", "").is_err());
     }
 }
